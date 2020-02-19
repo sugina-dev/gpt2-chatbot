@@ -47,8 +47,7 @@ def set_interact_args():
                         help='dialogue_model路径')
     parser.add_argument('--mmi_model_path', default='mmi_model/', type=str, required=False,
                         help='互信息mmi_model路径')
-    parser.add_argument('--save_samples_path', default="sample/", type=str, required=False, help="保存聊天记录的文件路径")
-    parser.add_argument('--repetition_penalty', default=1.0, type=float, required=False,
+    parser.add_argument('--repetition_penalty', default=1.5, type=float, required=False,
                         help="重复惩罚参数，若生成的对话重复性较高，可适当提高该参数")
     parser.add_argument('--seed', type=int, default=None, help='设置种子用于生成随机数，以使得训练的结果是确定的')
     parser.add_argument('--max_len', type=int, default=25, help='每个utterance的最大长度,超过指定长度则进行截断')
@@ -135,12 +134,6 @@ def main():
     mmi_model = GPT2LMHeadModel.from_pretrained(args.mmi_model_path)
     mmi_model.to(device)
     mmi_model.eval()
-    if args.save_samples_path:
-        if not os.path.exists(args.save_samples_path):
-            os.makedirs(args.save_samples_path)
-        samples_file = open(args.save_samples_path + '/mmi_samples.txt', 'a', encoding='utf8')
-        samples_file.write("聊天记录{}:\n".format(datetime.now()))
-        # 存储聊天记录，每个utterance以token的id的形式进行存储
     history = []
     print('开始和chatbot聊天，输入CTRL + Z以退出')
 
@@ -148,8 +141,6 @@ def main():
         try:
             text = input("user:")
             text = opencc_simp.convert(text)
-            if args.save_samples_path:
-                samples_file.write("user:{}\n".format(text))
             history.append(tokenizer.encode(text))
             input_ids = [tokenizer.cls_token_id]  # 每个input以[CLS]为开头
             for history_id, history_utr in enumerate(history[-args.max_history_len:]):
@@ -173,6 +164,29 @@ def main():
                 # 对于[UNK]的概率设为无穷小，也就是说模型的预测结果不可能是[UNK]这个token
                 for next_token_logit in next_token_logits:
                     next_token_logit[tokenizer.convert_tokens_to_ids('[UNK]')] = -float('Inf')
+                    # 同理，屏蔽與男性相關的詞彙
+                    next_token_logit[tokenizer.convert_tokens_to_ids('男')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('帥')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('公')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('哥')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('兄')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('弟')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('爸')] = -float('Inf')
+                    # 同理，屏蔽詈詞
+                    next_token_logit[tokenizer.convert_tokens_to_ids('妈')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('臭')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('草')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('肏')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('嗨')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('死')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('屎')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('骂')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('逼')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('残')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('揍')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('傻')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('害')] = -float('Inf')
+                    next_token_logit[tokenizer.convert_tokens_to_ids('呸')] = -float('Inf')
                 filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=args.topk, top_p=args.topp)
                 # torch.multinomial表示从候选集合中无放回地进行抽取num_samples个元素，权重越高，抽到的几率越高，返回元素的下标
                 next_token = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=1)
@@ -201,10 +215,7 @@ def main():
                         break
                 candidate_responses.append(response)
 
-            # mmi模型的输入
-            if args.debug:
-                print("candidate response:")
-            samples_file.write("candidate response:\n")
+            # mmi模型的输入=
             min_loss = float('Inf')
             best_response = ""
             for response in candidate_responses:
@@ -217,23 +228,18 @@ def main():
                 mmi_input_tensor = torch.tensor(mmi_input_id).long().to(device)
                 out = mmi_model(input_ids=mmi_input_tensor, labels=mmi_input_tensor)
                 loss = out[0].item()
-                if args.debug:
-                    text = tokenizer.convert_ids_to_tokens(response)
-                    print("{} loss:{}".format("".join(text), loss))
-                samples_file.write("{} loss:{}\n".format("".join(text), loss))
                 if loss < min_loss:
                     best_response = response
                     min_loss = loss
             history.append(best_response)
             text = tokenizer.convert_ids_to_tokens(best_response)
             text = "".join(text)
-            text = opencc_trad.convert(text)
+            if text == '图片评论':
+                text = '😭️😭️😭️😭️😭️😭️'
+            else:
+                text = opencc_trad.convert(text)
             print("chatbot:" + text)
-            if args.save_samples_path:
-                samples_file.write("chatbot:{}\n".format("".join(text)))
         except KeyboardInterrupt:
-            if args.save_samples_path:
-                samples_file.close()
             break
 
 
