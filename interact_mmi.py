@@ -21,10 +21,13 @@ from sklearn.model_selection import train_test_split
 from train import create_model
 import torch.nn.functional as F
 import copy
+import opencc2
 
 PAD = '[PAD]'
 pad_id = 0
 
+opencc_trad = opencc2.Converter(from_variant='cn', to_variant='hk', with_phrases=False, fast=True)
+opencc_simp = opencc2.Converter(from_variant='hk', to_variant='cn', with_phrases=False, fast=True)
 
 def set_interact_args():
     """
@@ -144,6 +147,7 @@ def main():
     while True:
         try:
             text = input("user:")
+            text = opencc_simp.convert(text)
             if args.save_samples_path:
                 samples_file.write("user:{}\n".format(text))
             history.append(tokenizer.encode(text))
@@ -222,7 +226,9 @@ def main():
                     min_loss = loss
             history.append(best_response)
             text = tokenizer.convert_ids_to_tokens(best_response)
-            print("chatbot:" + "".join(text))
+            text = "".join(text)
+            text = opencc_trad.convert(text)
+            print("chatbot:" + text)
             if args.save_samples_path:
                 samples_file.write("chatbot:{}\n".format("".join(text)))
         except KeyboardInterrupt:
