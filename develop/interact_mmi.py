@@ -1,12 +1,11 @@
 import argparse
 import copy
-from itertools import zip_longest, chain
 import opencc2
 import os
 import torch
 import torch.nn.functional as F
 from transformers import BertTokenizer
-from transformers.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
+from transformers.modeling_gpt2 import GPT2LMHeadModel
 
 def set_interact_args():
 	parser = argparse.ArgumentParser()
@@ -59,9 +58,32 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')
 			logit[indices_to_remove] = filter_value
 	return logits
 
-#######################################
-######## Global variables #############
-#######################################
+class InidvidualDialog:
+	def __init__(self):
+		self.history = []
+
+	def response(self, text):
+		# 輸入字符串轉簡體
+		text = opencc_simp.convert(text)
+		text = text.replace('喫', '吃')
+		# 將簡體字符串存入歷史
+		self.history.append(tokenizer.encode(text))
+		# 由模型根據歷史得出多個候選解
+		candidate_responses = get_response(self.history)
+		# 由 MMI 選出一個最優解
+		best_response = mmi_choice(self.history, candidate_responses)
+		# 最優解存入歷史
+		self.history.append(best_response)
+		# 最優解轉為繁體輸出
+		text = ''.join(tokenizer.convert_ids_to_tokens(best_response))
+		if text == '图片评论':
+			text = '😭️😭️😭️😭️😭️😭️'
+		else:
+			text = opencc_trad.convert(text)
+			text = text.replace('吃', '喫')
+		return text
+
+# Initialize
 
 args = set_interact_args()
 
@@ -87,99 +109,101 @@ mmi_model = GPT2LMHeadModel.from_pretrained(args.mmi_model_path)
 mmi_model.to(device)
 mmi_model.eval()
 
-class InidvidualDialog:
-	def __init__(self):
-		self.history = []
+def get_response(history):
+	input_ids = [tokenizer.cls_token_id]  # 每个input以[CLS]为开头
+	for history_utr in history[-args.max_history_len:]:
+		input_ids.extend(history_utr)
+		input_ids.append(tokenizer.sep_token_id)
+	# 用于批量生成response，维度为(batch_size,token_len)
+	input_ids = [copy.deepcopy(input_ids) for _ in range(args.batch_size)]
 
-	def response(self, text):
-		text = opencc_simp.convert(text)
-		text = text.replace('喫', '吃')
-		self.history.append(tokenizer.encode(text))
-		input_ids = [tokenizer.cls_token_id]  # 每个input以[CLS]为开头
-		for history_id, history_utr in enumerate(self.history[-args.max_history_len:]):
-			input_ids.extend(history_utr)
-			input_ids.append(tokenizer.sep_token_id)
-		# 用于批量生成response，维度为(batch_size,token_len)
-		input_ids = [copy.deepcopy(input_ids) for _ in range(args.batch_size)]
-
-		curr_input_tensors = torch.tensor(input_ids).long().to(device)
-		generated = []  # 二维数组，维度为(生成的response的最大长度，batch_size)，generated[i,j]表示第j个response的第i个token的id
-		finish_set = set()  # 标记是否所有response均已生成结束，若第i个response生成结束，即生成了sep_token_id，则将i放入finish_set
-		# 最多生成max_len个token
-		for _ in range(args.max_len):
-			outputs = dialogue_model(input_ids=curr_input_tensors)
-			next_token_logits = outputs[0][:, -1, :]
-			# 对于已生成的结果generated中的每个token添加一个重复惩罚项，降低其生成概率
-			for index in range(args.batch_size):
-				for token_id in set([token_ids[index] for token_ids in generated]):
-					next_token_logits[index][token_id] /= args.repetition_penalty
-			next_token_logits = next_token_logits / args.temperature
-			# 对于[UNK]的概率设为无穷小，也就是说模型的预测结果不可能是[UNK]这个token
-			for next_token_logit in next_token_logits:
-				next_token_logit[tokenizer.convert_tokens_to_ids('[UNK]')] = -float('Inf')
-				# 同理，屏蔽與男性相關的詞彙
-				for c in '男帥公哥兄弟爸':
-					next_token_logit[tokenizer.convert_tokens_to_ids(c)] = -float('Inf')
-				# 同理，屏蔽詈詞
-				for c in '妈臭草肏嗨死屎骂逼残揍傻害呸杀':
-					next_token_logit[tokenizer.convert_tokens_to_ids(c)] = -float('Inf')
-			filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=args.topk, top_p=args.topp)
-			# torch.multinomial表示从候选集合中无放回地进行抽取num_samples个元素，权重越高，抽到的几率越高，返回元素的下标
-			next_token = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=1)
-			# 判断是否有response生成了[SEP],将已生成了[SEP]的response进行标记
-			for index, token_id in enumerate(next_token[:, 0]):
-				if token_id == tokenizer.sep_token_id:
-					finish_set.add(index)
-			# 检验是否所有的response均已生成[SEP]
-			finish_flag = True  # 是否所有的response均已生成[SEP]的token
-			for index in range(args.batch_size):
-				if index not in finish_set:  # response批量生成未完成
-					finish_flag = False
-					break
-			if finish_flag:
+	curr_input_tensors = torch.tensor(input_ids).long().to(device)
+	generated = []  # 二维数组，维度为(生成的response的最大长度，batch_size)，generated[i,j]表示第j个response的第i个token的id
+	finish_set = set()  # 标记是否所有response均已生成结束，若第i个response生成结束，即生成了sep_token_id，则将i放入finish_set
+	# 最多生成max_len个token
+	for _ in range(args.max_len):
+		outputs = dialogue_model(input_ids=curr_input_tensors)
+		next_token_logits = outputs[0][:, -1, :]
+		# 对于已生成的结果generated中的每个token添加一个重复惩罚项，降低其生成概率
+		for index in range(args.batch_size):
+			for token_id in set([token_ids[index] for token_ids in generated]):
+				next_token_logits[index][token_id] /= args.repetition_penalty
+		next_token_logits = next_token_logits / args.temperature
+		# 对于[UNK]的概率设为无穷小，也就是说模型的预测结果不可能是[UNK]这个token
+		for next_token_logit in next_token_logits:
+			next_token_logit[tokenizer.convert_tokens_to_ids('[UNK]')] = -float('Inf')
+			# 同理，屏蔽與男性相關的詞彙
+			for c in '男帥公哥兄弟爸爹':
+				next_token_logit[tokenizer.convert_tokens_to_ids(c)] = -float('Inf')
+			# 同理，屏蔽詈詞
+			for c in '妈臭草肏嗨死屎骂逼残揍傻害呸':
+				next_token_logit[tokenizer.convert_tokens_to_ids(c)] = -float('Inf')
+		filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=args.topk, top_p=args.topp)
+		# torch.multinomial表示从候选集合中无放回地进行抽取num_samples个元素，权重越高，抽到的几率越高，返回元素的下标
+		next_token = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=1)
+		# 判断是否有response生成了[SEP],将已生成了[SEP]的response进行标记
+		for index, token_id in enumerate(next_token[:, 0]):
+			if token_id == tokenizer.sep_token_id:
+				finish_set.add(index)
+		# 检验是否所有的response均已生成[SEP]
+		finish_flag = True  # 是否所有的response均已生成[SEP]的token
+		for index in range(args.batch_size):
+			if index not in finish_set:  # response批量生成未完成
+				finish_flag = False
 				break
-			generated.append([token.item() for token in next_token[:, 0]])
-			# 将新生成的token与原来的token进行拼接
-			curr_input_tensors = torch.cat((curr_input_tensors, next_token), dim=-1)
-		candidate_responses = []  # 生成的所有候选response
-		for batch_index in range(args.batch_size):
-			response = []
-			for token_index in range(len(generated)):
-				if generated[token_index][batch_index] != tokenizer.sep_token_id:
-					response.append(generated[token_index][batch_index])
-				else:
-					break
-			candidate_responses.append(response)
+		if finish_flag:
+			break
+		generated.append([token.item() for token in next_token[:, 0]])
+		# 将新生成的token与原来的token进行拼接
+		curr_input_tensors = torch.cat((curr_input_tensors, next_token), dim=-1)
+	candidate_responses = []  # 生成的所有候选response
+	for batch_index in range(args.batch_size):
+		response = []
+		for token_index in range(len(generated)):
+			if generated[token_index][batch_index] != tokenizer.sep_token_id:
+				response.append(generated[token_index][batch_index])
+			else:
+				break
+		candidate_responses.append(response)
 
-		# mmi模型的输入=
-		min_loss = float('Inf')
-		best_response = ''
-		for response in candidate_responses:
-			mmi_input_id = [tokenizer.cls_token_id]  # 每个input以[CLS]为开头
-			mmi_input_id.extend(response)
+	return candidate_responses
+
+def mmi_choice(history, candidate_responses):
+	min_loss = float('Inf')
+	best_response = ''
+	for response in candidate_responses:
+		mmi_input_id = [tokenizer.cls_token_id]  # 每个input以[CLS]为开头
+		mmi_input_id.extend(response)
+		mmi_input_id.append(tokenizer.sep_token_id)
+		for history_utr in reversed(history[-args.max_history_len:]):
+			mmi_input_id.extend(history_utr)
 			mmi_input_id.append(tokenizer.sep_token_id)
-			for history_utr in reversed(self.history[-args.max_history_len:]):
-				mmi_input_id.extend(history_utr)
-				mmi_input_id.append(tokenizer.sep_token_id)
-			mmi_input_tensor = torch.tensor(mmi_input_id).long().to(device)
-			out = mmi_model(input_ids=mmi_input_tensor, labels=mmi_input_tensor)
-			loss = out[0].item()
-			if loss < min_loss:
-				best_response = response
-				min_loss = loss
-		self.history.append(best_response)
-		text = tokenizer.convert_ids_to_tokens(best_response)
-		text = ''.join(text)
-		if text == '图片评论':
-			text = '😭️😭️😭️😭️😭️😭️'
-		else:
-			text = opencc_trad.convert(text)
-			text = text.replace('吃', '喫')
-		return text
+		mmi_input_tensor = torch.tensor(mmi_input_id).long().to(device)
+		out = mmi_model(input_ids=mmi_input_tensor, labels=mmi_input_tensor)
+		loss = out[0].item()
+		if loss < min_loss:
+			best_response = response
+			min_loss = loss
+	return best_response
 
-idv_dia = InidvidualDialog()
+TALK_LIST = {}
+
+def start_talk(talk_id, text):
+	dialog = TALK_LIST.get(talk_id)
+	if not dialog:
+		dialog = InidvidualDialog()
+		TALK_LIST[talk_id] = dialog
+	return dialog.response(text)
+
 while True:
-	text = input('User: ')
-	if not text:
+	try:
+		# Talk 1
+		talk_id = '1'
+		text = input('User talk 1: ')
+		print('Chatbot talk 1:', start_talk(talk_id, text))
+		# Talk 2
+		talk_id = '2'
+		text = input('User talk 2: ')
+		print('Chatbot talk 2:', start_talk(talk_id, text))
+	except EOFError:
 		break
-	print('Chatbot:', idv_dia.response(text))
