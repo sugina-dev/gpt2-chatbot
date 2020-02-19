@@ -1,9 +1,10 @@
 __pycache__
 /sample
+.mypy_cache
 /data/*
 !/data/.placeholder
 
 # model
 
-/dialogue_model
-/mmi_model
+dialogue_model
+mmi_model

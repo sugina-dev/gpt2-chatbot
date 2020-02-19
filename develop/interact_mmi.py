@@ -14,14 +14,49 @@ from transformers.modeling_gpt2 import GPT2Config, GPT2LMHeadModel
 from transformers import BertTokenizer
 from os.path import join, exists
 from itertools import zip_longest, chain
-from dataset import MyDataset
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import CrossEntropyLoss
 from sklearn.model_selection import train_test_split
-from train import create_model
 import torch.nn.functional as F
 import copy
 import opencc2
+from torch.utils.data import Dataset
+
+
+# dataset.py
+class MyDataset(Dataset):
+    def __init__(self, data_list):
+        self.data_list = data_list
+
+    def __getitem__(self, index):
+        input_ids = self.data_list[index].strip()
+        input_ids = [int(token_id) for token_id in input_ids.split()]
+        return input_ids
+
+    def __len__(self):
+        return len(self.data_list)
+
+
+
+# train.py
+def create_model(args, vocab_size):
+    """
+
+    :param args:
+    :param vocab_size:字典大小
+    :return:
+    """
+    if args.pretrained_model:  # 如果指定了预训练的GPT2模型
+        model = GPT2LMHeadModel.from_pretrained(args.pretrained_model)
+    else:  # 若没有指定预训练模型，则初始化模型
+        model_config = transformers.modeling_gpt2.GPT2Config.from_json_file(args.model_config)
+        model = GPT2LMHeadModel(config=model_config)
+    # 根据tokenizer的vocabulary调整GPT2模型的voca的大小
+    model.resize_token_embeddings(vocab_size)
+    logger.info('model config:\n{}'.format(model.config.to_json_string()))
+    return model, model.config.to_dict().get("n_ctx")
+
+
 
 PAD = '[PAD]'
 pad_id = 0
@@ -40,9 +75,7 @@ def set_interact_args():
     parser.add_argument('--topp', default=0, type=float, required=False, help='最高积累概率')
     parser.add_argument('--model_config', default='config/model_config_dialogue_small.json', type=str, required=False,
                         help='模型参数')
-    parser.add_argument('--log_path', default='data/interacting_mmi.log', type=str, required=False,
-                        help='interact_mmi日志存放位置')
-    parser.add_argument('--voca_path', default='vocabulary/vocab_small.txt', type=str, required=False, help='选择词库')
+    parser.add_argument('--voca_path', default='vocab_small.txt', type=str, required=False, help='选择词库')
     parser.add_argument('--dialogue_model_path', default='dialogue_model/', type=str, required=False,
                         help='dialogue_model路径')
     parser.add_argument('--mmi_model_path', default='mmi_model/', type=str, required=False,
@@ -63,23 +96,9 @@ def create_logger(args):
     将日志输出到日志文件和控制台
     """
     logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.ERROR)
 
-    formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s')
-
-    # 创建一个handler，用于写入日志文件
-    file_handler = logging.FileHandler(
-        filename=args.log_path)
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.INFO)
-    logger.addHandler(file_handler)
-
-    # 创建一个handler，用于将日志输出到控制台
-    console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG)
-    console.setFormatter(formatter)
-    logger.addHandler(console)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
     return logger
 
