@@ -2,6 +2,8 @@ import argparse
 import copy
 import opencc2
 import os
+import threading
+import time
 import torch
 import torch.nn.functional as F
 from transformers import BertTokenizer
@@ -59,6 +61,9 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')
 	return logits
 
 class InidvidualDialog:
+	lock = threading.RLock()
+	lock_mmi = threading.RLock()
+
 	def __init__(self):
 		self.history = []
 
@@ -69,9 +74,13 @@ class InidvidualDialog:
 		# 將簡體字符串存入歷史
 		self.history.append(tokenizer.encode(text))
 		# 由模型根據歷史得出多個候選解
+		InidvidualDialog.lock.acquire()
 		candidate_responses = get_response(self.history)
+		InidvidualDialog.lock.release()
 		# 由 MMI 選出一個最優解
+		InidvidualDialog.lock_mmi.acquire()
 		best_response = mmi_choice(self.history, candidate_responses)
+		InidvidualDialog.lock_mmi.release()
 		# 最優解存入歷史
 		self.history.append(best_response)
 		# 最優解轉為繁體輸出
@@ -82,8 +91,6 @@ class InidvidualDialog:
 			text = opencc_trad.convert(text)
 			text = text.replace('吃', '喫')
 		return text
-
-# Initialize
 
 args = set_interact_args()
 
@@ -136,7 +143,7 @@ def get_response(history):
 			for c in '男帥公哥兄弟爸爹':
 				next_token_logit[tokenizer.convert_tokens_to_ids(c)] = -float('Inf')
 			# 同理，屏蔽詈詞
-			for c in '妈臭草肏嗨死屎骂逼残揍傻害呸':
+			for c in '妈臭草肏嗨死屎骂逼残揍傻害呸滚':
 				next_token_logit[tokenizer.convert_tokens_to_ids(c)] = -float('Inf')
 		filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=args.topk, top_p=args.topp)
 		# torch.multinomial表示从候选集合中无放回地进行抽取num_samples个元素，权重越高，抽到的几率越高，返回元素的下标
@@ -186,24 +193,54 @@ def mmi_choice(history, candidate_responses):
 			min_loss = loss
 	return best_response
 
-TALK_LIST = {}
+class TimedDict:
+	def __init__(self):
+		self.__table = {}
+		self.__d = {}
 
-def start_talk(talk_id, text):
-	dialog = TALK_LIST.get(talk_id)
-	if not dialog:
-		dialog = InidvidualDialog()
-		TALK_LIST[talk_id] = dialog
-	return dialog.response(text)
+	def check_key(self, key):
+		if key in self.__table and self.__table[key] < time.time():
+			self.__table.__delitem__(key)
+			self.__d.__delitem__(key)
 
+	def __setitem__(self, key, val, timeout=43200):
+		self.__table[key] = time.time() + timeout
+		self.__d.__setitem__(key, val)
+
+	def __contains__(self, key):
+		self.check_key(key)
+		return self.__d.__contains__(key)
+
+	def __getitem__(self, key):
+		self.check_key(key)
+		return self.__d.__getitem__(key)
+
+	def __delitem__(self, key):
+		self.check_key(key)
+		return self.__d.__delitem__(key)
+
+	def get(self, key):
+		self.check_key(key)
+		return self.__d.get(key)
+
+class Talk:
+	TALK_LIST = TimedDict()
+
+	def start_talk(self, talk_id, text):
+		dialog = self.TALK_LIST.get(talk_id)
+		if not dialog:
+			dialog = InidvidualDialog()
+			self.TALK_LIST[talk_id] = dialog
+		return dialog.response(text)
+
+	def remove_talk(self, talk_id):
+		if talk_id in self.TALK_LIST:
+			del self.TALK_LIST[talk_id]
+
+talk_id = 'ID'
+t = Talk()
 while True:
-	try:
-		# Talk 1
-		talk_id = '1'
-		text = input('User talk 1: ')
-		print('Chatbot talk 1:', start_talk(talk_id, text))
-		# Talk 2
-		talk_id = '2'
-		text = input('User talk 2: ')
-		print('Chatbot talk 2:', start_talk(talk_id, text))
-	except EOFError:
+	m = input('>>> ')
+	if not m:
 		break
+	print(t.start_talk(talk_id, m))
