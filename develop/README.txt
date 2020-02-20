@@ -13,4 +13,4 @@ Download the following files:
 
 The total size is 627 MB.
 
-Run `python interact_mmi.py --no_cuda`.
+Run python interact_mmi.py --no_cuda.
