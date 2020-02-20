@@ -1,5 +1,4 @@
 import argparse
-import copy
 import opencc2
 import os
 import threading
@@ -22,7 +21,7 @@ def set_interact_args():
 	parser.add_argument('--repetition_penalty', default=1.5, type=float, required=False, help='重复惩罚参数，若生成的对话重复性较高，可适当提高该参数')
 	parser.add_argument('--seed', type=int, default=None, help='设置种子用于生成随机数，以使得训练的结果是确定的')
 	parser.add_argument('--max_len', type=int, default=25, help='每个utterance的最大长度,超过指定长度则进行截断')
-	parser.add_argument('--max_history_len', type=int, default=5, help='dialogue history的最大长度')
+	parser.add_argument('--max_history_len', type=int, default=6, help='dialogue history的最大长度')
 	parser.add_argument('--no_cuda', action='store_true', help='不使用GPU进行预测')
 	parser.add_argument('--batch_size', type=int, default=5, help='批量生成response，然后经过MMI模型进行筛选')
 	parser.add_argument('--debug', action='store_true', help='指定该参数，可以查看生成的所有候选的reponse，及其loss')
@@ -111,40 +110,45 @@ dialogue_model = GPT2LMHeadModel.from_pretrained(args.dialogue_model_path)
 dialogue_model.to(device)
 dialogue_model.eval()
 
-# 互信息mmi model
+# 互信息 mmi model
 mmi_model = GPT2LMHeadModel.from_pretrained(args.mmi_model_path)
 mmi_model.to(device)
 mmi_model.eval()
 
+# 屏蔽與男性相關的詞彙
+# 屏蔽詈詞。經過測試，這樣的話即使罵 bot 也不會還口
+BLOCKED_TOKENS = '男帥公哥兄弟爸爹' '妈臭草肏嗨死屎骂逼残揍傻害呸滚'
+
 def get_response(history):
-	input_ids = [tokenizer.cls_token_id]  # 每个input以[CLS]为开头
-	for history_utr in history[-args.max_history_len:]:
+	input_ids = [tokenizer.cls_token_id]  # 每个 input 以 [CLS] 为开头
+	for history_utr in history[-args.max_history_len:]:  # 取最後 max_history_len 項
 		input_ids.extend(history_utr)
 		input_ids.append(tokenizer.sep_token_id)
-	# 用于批量生成response，维度为(batch_size,token_len)
-	input_ids = [copy.deepcopy(input_ids) for _ in range(args.batch_size)]
+
+	# 把 input_ids 重複 batch_size 遍，用于批量生成 response
+	input_ids = [input_ids[:] for _ in range(args.batch_size)]
 
 	curr_input_tensors = torch.tensor(input_ids).long().to(device)
-	generated = []  # 二维数组，维度为(生成的response的最大长度，batch_size)，generated[i,j]表示第j个response的第i个token的id
+	generated = []  # 二维数组，维度为 (生成的 response 的最大长度, batch_size)，generated[i,j] 表示第 j 个 response 的第 i 个 token 的 id
 	finish_set = set()  # 标记是否所有response均已生成结束，若第i个response生成结束，即生成了sep_token_id，则将i放入finish_set
+
 	# 最多生成max_len个token
 	for _ in range(args.max_len):
 		outputs = dialogue_model(input_ids=curr_input_tensors)
 		next_token_logits = outputs[0][:, -1, :]
 		# 对于已生成的结果generated中的每个token添加一个重复惩罚项，降低其生成概率
 		for index in range(args.batch_size):
-			for token_id in set([token_ids[index] for token_ids in generated]):
+			for token_id in set(token_ids[index] for token_ids in generated):
 				next_token_logits[index][token_id] /= args.repetition_penalty
 		next_token_logits = next_token_logits / args.temperature
-		# 对于[UNK]的概率设为无穷小，也就是说模型的预测结果不可能是[UNK]这个token
+
 		for next_token_logit in next_token_logits:
+			# 对于[UNK]的概率设为无穷小，也就是说模型的预测结果不可能是[UNK]这个token
 			next_token_logit[tokenizer.convert_tokens_to_ids('[UNK]')] = -float('Inf')
-			# 同理，屏蔽與男性相關的詞彙
-			for c in '男帥公哥兄弟爸爹':
+			# 同理，屏蔽詞彙
+			for c in BLOCKED_TOKENS:
 				next_token_logit[tokenizer.convert_tokens_to_ids(c)] = -float('Inf')
-			# 同理，屏蔽詈詞
-			for c in '妈臭草肏嗨死屎骂逼残揍傻害呸滚':
-				next_token_logit[tokenizer.convert_tokens_to_ids(c)] = -float('Inf')
+
 		filtered_logits = top_k_top_p_filtering(next_token_logits, top_k=args.topk, top_p=args.topp)
 		# torch.multinomial表示从候选集合中无放回地进行抽取num_samples个元素，权重越高，抽到的几率越高，返回元素的下标
 		next_token = torch.multinomial(F.softmax(filtered_logits, dim=-1), num_samples=1)
@@ -167,10 +171,9 @@ def get_response(history):
 	for batch_index in range(args.batch_size):
 		response = []
 		for token_index in range(len(generated)):
-			if generated[token_index][batch_index] != tokenizer.sep_token_id:
-				response.append(generated[token_index][batch_index])
-			else:
+			if generated[token_index][batch_index] == tokenizer.sep_token_id:
 				break
+			response.append(generated[token_index][batch_index])
 		candidate_responses.append(response)
 
 	return candidate_responses
