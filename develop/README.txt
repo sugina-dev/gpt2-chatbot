@@ -39,3 +39,7 @@ RUN pip config set global.index-url https://mirrors.aliyun.com/pypi/simple
 
 REQUEST_KWARGS = { 'proxy_url': 'socks5h://localhost:1080' }
 updater = Updater(TOKEN, request_kwargs=REQUEST_KWARGS, use_context=True)
+
+🔶️ Test
+
+$ python interact_mmi.py --no_cuda

@@ -60,9 +60,6 @@ def top_k_top_p_filtering(logits, top_k=0, top_p=0.0, filter_value=-float('Inf')
 	return logits
 
 class InidvidualDialog:
-	lock = threading.RLock()
-	lock_mmi = threading.RLock()
-
 	def __init__(self):
 		self.history = []
 
@@ -72,14 +69,12 @@ class InidvidualDialog:
 		text = text.replace('喫', '吃')
 		# 將簡體字符串存入歷史
 		self.history.append(tokenizer.encode(text))
+		if len(self.history) > args.max_history_len:
+			self.history = history[-args.max_history_len:]  # 若長度超過 max_history_len 則清理
 		# 由模型根據歷史得出多個候選解
-		InidvidualDialog.lock.acquire()
 		candidate_responses = get_response(self.history)
-		InidvidualDialog.lock.release()
 		# 由 MMI 選出一個最優解
-		InidvidualDialog.lock_mmi.acquire()
 		best_response = mmi_choice(self.history, candidate_responses)
-		InidvidualDialog.lock_mmi.release()
 		# 最優解存入歷史
 		self.history.append(best_response)
 		# 最優解轉為繁體輸出
@@ -116,14 +111,14 @@ mmi_model.to(device)
 mmi_model.eval()
 
 # 屏蔽與男性相關的詞彙
-# 屏蔽詈詞。經過測試，這樣的話即使罵 bot 也不會還口
-BLOCKED_TOKENS = '男帥公哥兄弟爸爹' '妈臭草肏嗨死屎骂逼残揍傻害呸滚'
+# 屏蔽詈詞。經過測試，這樣的話即使被罵也不會還口
+BLOCKED_TOKENS = '男帥公哥兄弟爸爹' '妈臭草肏嗨死屎骂逼残揍傻害呸滚狗'
 
 def get_response(history):
 	input_ids = [tokenizer.cls_token_id]  # 每个 input 以 [CLS] 为开头
-	for history_utr in history[-args.max_history_len:]:  # 取最後 max_history_len 項
+	for history_utr in history:
 		input_ids.extend(history_utr)
-		input_ids.append(tokenizer.sep_token_id)
+		input_ids.append(tokenizer.sep_token_id)  # 每條 history 之間用 [SEP] 隔開
 
 	# 把 input_ids 重複 batch_size 遍，用于批量生成 response
 	input_ids = [input_ids[:] for _ in range(args.batch_size)]
@@ -132,9 +127,9 @@ def get_response(history):
 	generated = []  # 二维数组，维度为 (生成的 response 的最大长度, batch_size)，generated[i,j] 表示第 j 个 response 的第 i 个 token 的 id
 	finish_set = set()  # 标记是否所有response均已生成结束，若第i个response生成结束，即生成了sep_token_id，则将i放入finish_set
 
-	# 最多生成max_len个token
-	for _ in range(args.max_len):
+	for _ in range(args.max_len):  # 最多生成 max_len 个 token
 		outputs = dialogue_model(input_ids=curr_input_tensors)
+		print(outputs, type(outputs))
 		next_token_logits = outputs[0][:, -1, :]
 		# 对于已生成的结果generated中的每个token添加一个重复惩罚项，降低其生成概率
 		for index in range(args.batch_size):
@@ -243,38 +238,14 @@ class Talk:
 		else:
 			return False
 
-t = Talk()
+def test():
+	t = Talk()
+	talk_id = 'ID'
+	while True:
+		m = input('>>> ')
+		if not m:
+			break
+		print(t.start_talk(talk_id, m))
 
-# Bot
-
-TOKEN = os.environ['BOT_TOKEN']
-
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
-
-updater = Updater(TOKEN, use_context=True)
-dispatcher = updater.dispatcher
-
-def start(update, context):
-	chat_id = update.effective_chat.id
-	context.bot.send_message(chat_id=chat_id, text='''我是一個 AI。我還不是很會説話，請多多關照。
-我的開發者們能被找到在 [這裏](https://github.com/sugina-dev/gpt2-chatbot)。
-要讓我忘記和你聊過的天的話，使用 /destroy 命令來達到吧。
-下面開始跟你聊天喔。''', parse_mode='Markdown', disable_web_page_preview=True)
-dispatcher.add_handler(CommandHandler('start', start))
-
-def destroy(update, context):
-	chat_id = update.effective_chat.id
-	if t.remove_talk(chat_id):
-		context.bot.send_message(chat_id=chat_id, text='銷毀已完成')
-	else:
-		context.bot.send_message(chat_id=chat_id, text='已無事可做')
-dispatcher.add_handler(CommandHandler('destroy', destroy))
-
-def chat(update, context):
-	chat_id = update.effective_chat.id
-	text = update.message.text
-	reply = t.start_talk(chat_id, text)
-	context.bot.send_message(chat_id=chat_id, text=reply)
-dispatcher.add_handler(MessageHandler(Filters.text, chat))
-
-updater.start_polling()
+if __name__ == '__main__':
+	test()
