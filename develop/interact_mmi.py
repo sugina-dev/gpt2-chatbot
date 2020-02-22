@@ -129,7 +129,6 @@ def get_response(history):
 
 	for _ in range(args.max_len):  # 最多生成 max_len 个 token
 		outputs = dialogue_model(input_ids=curr_input_tensors)
-		print(outputs, type(outputs))
 		next_token_logits = outputs[0][:, -1, :]
 		# 对于已生成的结果generated中的每个token添加一个重复惩罚项，降低其生成概率
 		for index in range(args.batch_size):
