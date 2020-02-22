@@ -13,7 +13,7 @@ dispatcher = updater.dispatcher
 def start(update, context):
 	chat_id = update.effective_chat.id
 	context.bot.send_message(chat_id=chat_id, text='''我是一個 AI。我還不是很會説話，請多多關照。
-我的開發者們能被發現在 [這裏](https://github.com/sugina-dev/gpt2-chatbot)。
+我的開發者們能被發現在 [這裏](https://github.com/sugina-dev/gpt2-chinese-chatbot)。
 要讓我忘記和你聊過的天的話，使用 /destroy 命令來達到吧。
 下面開始跟你聊天喔。''', parse_mode='Markdown', disable_web_page_preview=True)
 dispatcher.add_handler(CommandHandler('start', start))
