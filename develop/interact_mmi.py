@@ -70,7 +70,7 @@ class InidvidualDialog:
 		# 將簡體字符串存入歷史
 		self.history.append(tokenizer.encode(text))
 		if len(self.history) > args.max_history_len:
-			self.history = history[-args.max_history_len:]  # 若長度超過 max_history_len 則清理
+			self.history = self.history[-args.max_history_len:]  # 若長度超過 max_history_len 則清理
 		# 由模型根據歷史得出多個候選解
 		candidate_responses = get_response(self.history)
 		# 由 MMI 選出一個最優解

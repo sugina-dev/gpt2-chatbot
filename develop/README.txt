@@ -10,6 +10,22 @@ Google Drive：https://drive.google.com/drive/folders/1oWgKXP6VG_sT_2VMrm0xL4uOq
 
 The total size is 627 MB.
 
+Typical download process:
+
+```
+pip install gdown
+
+mkdir dialogue_model
+cd dialogue_model
+gdown 'https://drive.google.com/uc?id=1sfXaFcjrXIiqDkaVgeeXTp2mMmRfmqY8'
+gdown 'https://drive.google.com/uc?id=1gWn3r2BesJH5J7JLjzmgopT5c7Vb_wyt'
+
+mkdir mmi_model
+cd mmi_model
+gdown 'https://drive.google.com/uc?id=12QMqqtEPYUsCvkCEe-CrO6p2Ku8qO6fw'
+gdown 'https://drive.google.com/uc?id=1HOuamzmH6gMipDK9nMKoecHQjdL2DnhE'
+```
+
 🔶️ Prerequisites
 
 Download the above files:

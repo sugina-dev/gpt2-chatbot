@@ -3,6 +3,7 @@ __pycache__
 .mypy_cache
 /data/*
 !/data/.placeholder
+venv
 
 # model
 
