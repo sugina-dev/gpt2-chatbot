@@ -1,5 +1,5 @@
 import argparse
-import opencc
+from opencc import OpenCC
 import os
 import threading
 import time
@@ -94,8 +94,8 @@ device = 'cuda' if args.cuda else 'cpu'
 os.environ['CUDA_VISIBLE_DEVICES'] = args.device
 
 # 繁簡轉換器
-opencc_trad = opencc.Converter(from_variant='cn', to_variant='hk')
-opencc_simp = opencc.Converter(from_variant='hk', to_variant='cn')
+opencc_trad = OpenCC('s2hk')
+opencc_simp = OpenCC('hk2s')
 
 # tokenizer
 tokenizer = BertTokenizer(vocab_file=args.voca_path)
